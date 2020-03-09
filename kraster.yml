@@ -1,0 +1,67 @@
+---
+kind: Namespace
+apiVersion: v1
+metadata:
+  name: kraster
+  labels: 
+    restartEnabled: "true"
+---
+# Service account the client will use to reset the deployment,
+# by default the pods running inside the cluster can do no such things.
+kind: ServiceAccount
+apiVersion: v1
+metadata:
+  name: kraster
+  namespace: kraster
+---
+# allow getting status and patching only the one deployment you want
+# to restart
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kraster
+  namespace: kraster
+rules:
+  - apiGroups: ["apps", "extensions"]
+    resources: ["deployments"]
+    resourceNames: ["*"]
+    verbs: ["get", "patch"] 
+---
+# bind the role to the service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kraster
+  namespace: kraster
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kraster
+subjects:
+  - kind: ServiceAccount
+    name: kraster
+    namespace: kraster
+---
+apiVersion: batch/v1beta1
+kind: CronJob
+metadata:
+  name: kraster
+  namespace: kraster
+spec:
+  concurrencyPolicy: Forbid
+  schedule: '* 3 * * *' # cron spec of time, here, every day at 3 am
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 600 
+      template:
+        spec:
+          serviceAccountName: kraster  
+          restartPolicy: Never
+          containers:
+            - name: kubectl
+              image: bskim45/helm-kubectl-jq
+              command:
+                - "/bin/sh"
+                - "-c"
+                - "deploys=`kubectl get deployments --all-namespaces -o json -l=restartEnabled=true | jq \".items[].metadata.name\" -r` ; for deploy in $deploys; do kubectl rollout restart deployments/$deploy -n $(kubectl get deployment --all-namespaces -o json | jq -r \".items[] | select(.metadata.name==\\\"$deploy\\\") | .metadata.namespace\"); done"
